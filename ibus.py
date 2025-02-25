@@ -65,9 +65,20 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.preedit_string = ''
         self.lookup_table = IBus.LookupTable.new(10, 0, True, True)
         self.prop_list = IBus.PropList()
-
+        self._setup_prefixes(["::"])
+        
         debug("Create UniEmoji engine OK")
 
+    def _setup_prefixes(self, prefixes):
+        self.prefixes = prefixes
+        self.lastnchars = ""
+        self.max_prefix_len = max(len(p) for p in prefixes) if len(prefixes) > 0 else 0
+        self.active_prefixes = []
+        
+    def _reset_active_prefixes(self):
+        self.active_prefixes.clear()
+        self.lastnchars = ""
+        
     def set_lookup_table_cursor_pos_in_current_page(self, index):
         '''Sets the cursor in the lookup table to index in the current page
 
@@ -89,24 +100,66 @@ class UniEmojiIBusEngine(IBus.Engine):
             self.commit_candidate()
 
     def do_process_key_event(self, keyval, keycode, state):
-        debug("process_key_event(%04x, %04x, %04x)" % (keyval, keycode, state))
+        # debug("process_key_event(%04x, %04x, %04x)" % (keyval, keycode, state))
 
         # ignore key release events
         is_press = ((state & IBus.ModifierType.RELEASE_MASK) == 0)
         if not is_press:
             return False
 
+        if len(self.prefixes) > 0:
+            # Add the key to the lastnchars buffer
+            if keyval in (IBus.Return, IBus.KP_Enter, IBus.Escape, IBus.BackSpace):
+                self.lastnchars = ""
+                if len(self.active_prefixes) == 0:
+                    self.commit_string(self.preedit_string)
+                    return False
+            elif keyval < 128 and chr(keyval).isprintable():
+                self.lastnchars += chr(keyval)
+                if len(self.lastnchars) > self.max_prefix_len:
+                    self.lastnchars = self.lastnchars[-self.max_prefix_len:]
+                debug('lastnchars:', self.lastnchars)
+                    
+                partial_match = False
+                for prefix in self.prefixes:
+                    # Check for a partial match of the first characters of the prefix in the last characters of lastnchars
+                    for i in range(1, len(prefix) + 1):
+                        if prefix.startswith(self.lastnchars[-i:]):                        
+                            partial_match = True
+                            if prefix in self.lastnchars:
+                                if prefix not in self.active_prefixes:
+                                    self.active_prefixes.append(prefix)
+                            break
+                    del i
+                del prefix
+                
+                if len(self.active_prefixes) == 0:
+                    if partial_match:
+                        self.preedit_string += chr(keyval)
+                        self.is_invalidate = True
+                        self.update_prefix_text()
+                        return True
+                    else:
+                        self.commit_string(self.preedit_string)
+                        return False
+                    
+        
         if self.preedit_string:
             if keyval in (IBus.Return, IBus.KP_Enter):
                 if self.lookup_table.get_number_of_candidates() > 0:
                     self.commit_candidate()
+                    return True
                 else:
                     self.commit_string(self.preedit_string)
-                return True
+                    return False
             elif keyval == IBus.Escape:
-                self.preedit_string = ''
-                self.update_candidates()
-                return True
+                if len(self.prefixes) == 0:
+                    self.preedit_string = ''
+                    self.update_candidates()
+                    return True
+                else:
+                    self.commit_string(self.preedit_string)
+                    return False
             elif keyval == IBus.BackSpace:
                 self.preedit_string = self.preedit_string[:-1]
                 self.invalidate()
@@ -189,18 +242,33 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.commit_text(IBus.Text.new_from_string(text))
         self.preedit_string = ''
         self.update_candidates()
+        self._reset_active_prefixes()
 
     def commit_candidate(self):
         self.commit_string(self.candidates[self.lookup_table.get_cursor_pos()])
 
     def update_candidates(self):
+        print('preedit_string:', self.preedit_string)
+        
         preedit_len = len(self.preedit_string)
         attrs = IBus.AttrList()
         self.lookup_table.clear()
         self.candidates = []
 
         if preedit_len > 0:
-            uniemoji_results = self.uniemoji.find_characters(self.preedit_string)
+            if (len(self.prefixes) > 0):
+                queries = []
+                for p in self.active_prefixes:
+                    if self.preedit_string.startswith(p):
+                        query = self.preedit_string[len(p):]
+                        if query not in queries:
+                            queries.append(query)
+                    
+                uniemoji_results = []
+                for query in queries:
+                    uniemoji_results = self.uniemoji.find_characters(query)
+            else:
+                uniemoji_results = self.uniemoji.find_characters(self.preedit_string)
             for char_sequence, display_str in uniemoji_results:
                 candidate = IBus.Text.new_from_string(display_str)
                 self.candidates.append(char_sequence)
@@ -216,6 +284,21 @@ class UniEmojiIBusEngine(IBus.Engine):
         text.set_attributes(attrs)
         self.update_preedit_text(text, preedit_len, preedit_len > 0)
         self._update_lookup_table()
+        self.is_invalidate = False
+        
+    def update_prefix_text(self):
+        preedit_len = len(self.preedit_string)
+        attrs = IBus.AttrList()
+        
+        text = IBus.Text.new_from_string(self.preedit_string)
+        text.set_attributes(attrs)
+        self.update_auxiliary_text(text, preedit_len > 0)
+
+        attrs.append(IBus.Attribute.new(IBus.AttrType.UNDERLINE,
+                IBus.AttrUnderline.SINGLE, 0, preedit_len))
+        text = IBus.Text.new_from_string(self.preedit_string)
+        text.set_attributes(attrs)
+        self.update_preedit_text(text, preedit_len, preedit_len > 0)
         self.is_invalidate = False
 
     def _update_lookup_table(self):
