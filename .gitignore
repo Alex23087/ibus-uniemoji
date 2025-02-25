@@ -3,3 +3,7 @@ uniemoji.xml
 config.py
 *~
 *.pyc
+pkg
+src
+ibus-uniemoji*.pkg.tar.zst
+PKGBUILD

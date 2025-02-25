@@ -44,7 +44,7 @@ try:
 except ImportError:
     SYS_CONF_DIR = '/etc'
 
-debug_on = True
+debug_on = False
 def debug(*a, **kw):
     if debug_on:
         print(*a, **kw)
@@ -265,24 +265,56 @@ class UniEmoji():
 
         # Load custom file(s)
         for d in reversed(SETTINGS_DIRS):
-            custom_filename = os.path.join(d, 'custom.json')
-            debug('Loading custom emoji from {}'.format(custom_filename))
-            if os.path.isfile(custom_filename):
-                custom_table = None
-                try:
-                    with open(custom_filename, encoding='utf-8') as f:
-                        custom_table = json.loads(f.read())
-                except:
-                    error = sys.exc_info()[1]
-                    debug(error)
-                    self.table = {
-                        'Failed to load custom file {}: {}'.format(custom_filename, error): 'ERROR'
-                    }
-                    break
-                else:
-                    debug(custom_table)
-                    for k, v in custom_table.items():
-                        self.table[k] = UniEmojiChar(v, is_custom=True)
+            for root, dirs, files in os.walk(d):
+                for file in files:
+                    if file.endswith('.json'):
+                        custom_filename = os.path.join(root, file)
+                        debug('Loading custom emoji from {}'.format(custom_filename))
+                        if os.path.isfile(custom_filename):
+                            custom_table = None
+                            try:
+                                with open(custom_filename, encoding='utf-8') as f:
+                                    custom_table = json.loads(f.read())
+                            except:
+                                error = sys.exc_info()[1]
+                                debug(error)
+                                self.table = {
+                                    'Failed to load custom file {}: {}'.format(custom_filename, error): 'ERROR'
+                                }
+                                break
+                            else:
+                                debug(custom_table)
+                                if "unimoji-version" in custom_table and isinstance(custom_table['unimoji-version'], int):
+                                    if custom_table['unimoji-version'] == 2:
+                                        debug('Unimoji version 2 detected')
+                                        for k, v in custom_table.items():
+                                            if isinstance(v, list):
+                                                for n in v:
+                                                    if n in self.table:
+                                                        self.table[n].aliasing.append(k)
+                                                    else:
+                                                        self.table[n] = UniEmojiChar(k, is_custom=True)
+                                                del n
+                                            elif isinstance(v, str):
+                                                if v in self.table:
+                                                    self.table[v].aliasing.append(k)
+                                                else:
+                                                    self.table[v] = UniEmojiChar(k, is_custom=True)
+                                        del k, v
+                                else:
+                                    for k, v in custom_table.items():
+                                        if isinstance(v, list):
+                                            if name in self.table:
+                                                self.table[k].aliasing.extend(v)
+                                            else:
+                                                self.table[k] = UniEmojiChar(v[0], is_custom=True)
+                                                self.table[k].aliasing.extend(v[1:])
+                                        elif isinstance(v, str):
+                                            if name in self.table:
+                                                self.table[k].aliasing.append(v)
+                                            else:
+                                                self.table[k] = UniEmojiChar(v, is_custom=True)
+                                    del k, v
 
     def _filter(self, query, limit=100):
         if len(self.table) <= 10:
@@ -379,6 +411,7 @@ class UniEmoji():
                                 score += 2
                             elif [j2] == ' ':
                                 score += 1
+                    # Edited to improve performance. We filter out low score candidates.
                     if score > 0:
                         if candidate_info.unicode_str:
                             matched.append((0, score, candidate, CANDIDATE_UNICODE))
@@ -452,10 +485,13 @@ class UniEmoji():
                 shortname = self.unicode_chars_to_shortnames.get(unicode_str, '')
                 if shortname:
                     shortname = ':' + shortname + ': '
-                display_str = '{}{} [{}]'.format(
-                    shortname,
-                    unicode_name,
-                    name)
+                if unicode_name:
+                    display_str = '{}{} [{}]'.format(
+                        shortname,
+                        unicode_name,
+                        name)
+                else:
+                    display_str = name
                 append_result(unicode_str, display_str)
 
         return results
@@ -464,5 +500,6 @@ if __name__ == '__main__':
     query_string = ' '.join(sys.argv[1:])
     ue = UniEmoji()
     results = ue.find_characters(query_string)
+    # results = results[:10]
     for _, display_str in results:
         print(display_str)
