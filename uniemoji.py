@@ -142,11 +142,33 @@ class UniEmojiChar(object):
             self.is_custom,
             self.aliasing)
 
+UNICODE_TABLE=0
+EMOJI_TABLE=1
+DEFAULT_PREFIX=""
+UNICODE_PREFIX=""
+EMOJI_PREFIX=""
+DEFAULT_CASE_SENSITIVE=False
 
 class UniEmoji():
     def __init__(self):
         super(UniEmoji, self).__init__()
-        self.table = defaultdict(UniEmojiChar)
+        self._load_settings()
+        debug('Settings loaded')
+        debug('Default prefix: "{}"'.format(DEFAULT_PREFIX))
+        debug('Unicode prefix: "{}"'.format(UNICODE_PREFIX))
+        debug('Emoji prefix: "{}"'.format(EMOJI_PREFIX))
+        debug('Default case sensitivity: {}'.format(DEFAULT_CASE_SENSITIVE))
+        self.tables = [
+            defaultdict(UniEmojiChar),
+            defaultdict(UniEmojiChar)
+        ]
+        self.prefix_map = {}
+        self.reverse_prefix_map = {}
+        self.case_sensitivity_map = defaultdict(lambda: DEFAULT_CASE_SENSITIVE)
+        
+        self._register_prefix(UNICODE_PREFIX, UNICODE_TABLE)
+        self._register_prefix(EMOJI_PREFIX, EMOJI_TABLE)
+        
         self.unicode_chars_to_names = {}
         self.unicode_chars_to_shortnames = {}
         self.ascii_table = {}
@@ -171,7 +193,7 @@ class UniEmoji():
                 if description.startswith('flag: '):
                     description = 'flag of ' + description[6:]
                 self.unicode_chars_to_names[unicode_str] = description
-                self.table[description] = UniEmojiChar(unicode_str)
+                self.tables[EMOJI_TABLE][description] = UniEmojiChar(unicode_str)
 
         # Load unicode characters
         with open(os.path.join(__base_dir__, 'unicode', 'UnicodeData.txt'), encoding='utf-8') as unicodedata:
@@ -190,10 +212,10 @@ class UniEmoji():
                     if char_with_fe0f in self.unicode_chars_to_names:
                         self.has_text_representation[char_with_fe0f] = unicode_char
                         if name != self.unicode_chars_to_names[char_with_fe0f]:
-                            if name not in self.table:
-                                self.table[name] = UniEmojiChar(char_with_fe0f)
+                            if name not in self.tables[UNICODE_TABLE]:
+                                self.tables[UNICODE_TABLE][name] = UniEmojiChar(char_with_fe0f)
                     else:
-                        self.table[name] = UniEmojiChar(unicode_char)
+                        self.tables[UNICODE_TABLE][name] = UniEmojiChar(unicode_char)
                         self.unicode_chars_to_names[unicode_char] = name
 
         # Load emojione file
@@ -214,15 +236,15 @@ class UniEmoji():
 
             emoji_shortname = emoji_shortname.replace('_', ' ')
 
-            if emoji_shortname in self.table:
+            if emoji_shortname in self.tables[EMOJI_TABLE]:
                 # Check for clashes between emojione's names and the existing unicode name.
                 # Clashes turn into aliases.
-                if unicode_str != self.table[emoji_shortname].unicode_str:
-                    self.table[emoji_shortname].aliasing.append(unicode_str)
+                if unicode_str != self.tables[EMOJI_TABLE][emoji_shortname].unicode_str:
+                    self.tables[EMOJI_TABLE][emoji_shortname].aliasing.append(unicode_str)
             elif emoji_info['category'] == 'flags':
                 pass # No special handling of flags
             else:
-                self.table[emoji_shortname] = UniEmojiChar(unicode_str, is_emojione=True)
+                self.tables[EMOJI_TABLE][emoji_shortname] = UniEmojiChar(unicode_str, is_emojione=True)
 
             # When the string defined by emojione isn't in Unicode
             # (because it's a combination of characters), use emojione's
@@ -230,8 +252,8 @@ class UniEmoji():
             if unicode_str not in self.unicode_chars_to_names:
                 long_name = emoji_info['name']
                 self.unicode_chars_to_names[unicode_str] = long_name
-                if long_name not in self.table:
-                    self.table[long_name] = UniEmojiChar(unicode_str)
+                if long_name not in self.tables[EMOJI_TABLE]:
+                    self.tables[EMOJI_TABLE][long_name] = UniEmojiChar(unicode_str)
 
             for alias in emoji_info.get('keywords', []):
                 alias_counter[alias] += 1
@@ -245,7 +267,7 @@ class UniEmoji():
         for alias, n in alias_counter.most_common():
             if n >= 25:
                 continue
-            self.table[alias].aliasing.extend(temp_alias_table[alias])
+            self.tables[EMOJI_TABLE][alias].aliasing.extend(temp_alias_table[alias])
 
         # Load emoji ZWJ sequences
         with open(os.path.join(__base_dir__, 'unicode', 'emoji-zwj-sequences.txt'), encoding='utf-8') as f:
@@ -261,69 +283,142 @@ class UniEmoji():
                 description = fields[2][:fields[2].find('#')].strip()
                 if unicode_str not in self.unicode_chars_to_names:
                     self.unicode_chars_to_names[unicode_str] = description
-                    self.table[description] = UniEmojiChar(unicode_str)
+                    self.tables[EMOJI_TABLE][description] = UniEmojiChar(unicode_str)
 
         # Load custom file(s)
         for d in reversed(SETTINGS_DIRS):
             for root, dirs, files in os.walk(d):
                 for file in files:
-                    if file.endswith('.json'):
+                    if file.endswith('.json') and file != "settings.json":
                         custom_filename = os.path.join(root, file)
                         debug('Loading custom emoji from {}'.format(custom_filename))
                         if os.path.isfile(custom_filename):
                             custom_table = None
+                            current_table = len(self.tables)
+                            self.tables.append(defaultdict(UniEmojiChar))
                             try:
                                 with open(custom_filename, encoding='utf-8') as f:
                                     custom_table = json.loads(f.read())
                             except:
                                 error = sys.exc_info()[1]
                                 debug(error)
-                                self.table = {
+                                self.tables[current_table] = {
                                     'Failed to load custom file {}: {}'.format(custom_filename, error): 'ERROR'
                                 }
                                 break
                             else:
-                                debug(custom_table)
+                                # debug(custom_table)
                                 if "unimoji-version" in custom_table and isinstance(custom_table['unimoji-version'], int):
                                     if custom_table['unimoji-version'] == 2:
+                                        if "unimoji-prefix" in custom_table and isinstance(custom_table['unimoji-prefix'], str):
+                                            self._register_prefix(custom_table['unimoji-prefix'], current_table)
+                                        else:
+                                            self._register_prefix(DEFAULT_PREFIX, current_table)
                                         debug('Unimoji version 2 detected')
                                         for k, v in custom_table.items():
+                                            if k == "unimoji-prefix" or k == "unimoji-version":
+                                                continue
                                             if isinstance(v, list):
                                                 for n in v:
-                                                    if n in self.table:
-                                                        self.table[n].aliasing.append(k)
+                                                    if n in self.tables[current_table]:
+                                                        self.tables[current_table][n].aliasing.append(k)
                                                     else:
-                                                        self.table[n] = UniEmojiChar(k, is_custom=True)
+                                                        self.tables[current_table][n] = UniEmojiChar(k, is_custom=True)
                                                 del n
                                             elif isinstance(v, str):
-                                                if v in self.table:
-                                                    self.table[v].aliasing.append(k)
+                                                if v in self.tables[current_table]:
+                                                    self.tables[current_table][v].aliasing.append(k)
                                                 else:
-                                                    self.table[v] = UniEmojiChar(k, is_custom=True)
+                                                    self.tables[current_table][v] = UniEmojiChar(k, is_custom=True)
                                         del k, v
+                                    else:
+                                        debug('Unrecognised unimoji version')
                                 else:
+                                    debug('Unimoji version 1 detected')
+                                    self._register_prefix(DEFAULT_PREFIX, current_table)
                                     for k, v in custom_table.items():
                                         if isinstance(v, list):
-                                            if name in self.table:
-                                                self.table[k].aliasing.extend(v)
+                                            if name in self.tables[current_table]:
+                                                self.tables[current_table][k].aliasing.extend(v)
                                             else:
-                                                self.table[k] = UniEmojiChar(v[0], is_custom=True)
-                                                self.table[k].aliasing.extend(v[1:])
+                                                self.tables[current_table][k] = UniEmojiChar(v[0], is_custom=True)
+                                                self.tables[current_table][k].aliasing.extend(v[1:])
                                         elif isinstance(v, str):
-                                            if name in self.table:
-                                                self.table[k].aliasing.append(v)
+                                            if name in self.tables[current_table]:
+                                                self.tables[current_table][k].aliasing.append(v)
                                             else:
-                                                self.table[k] = UniEmojiChar(v, is_custom=True)
+                                                self.tables[current_table][k] = UniEmojiChar(v, is_custom=True)
                                     del k, v
+                                    
+        #TODO Tables without prefix
+        debug(self.prefix_map)
+        debug(self.reverse_prefix_map)
+        
+    def _load_settings(self):
+        for d in reversed(SETTINGS_DIRS):
+            settings_filename = os.path.join(d, 'settings.json')
+            if os.path.isfile(settings_filename):
+                with open(settings_filename, encoding='utf-8') as f:
+                    settings = json.loads(f.read())
+                    if 'debug' in settings:
+                        global debug_on
+                        debug_on = settings['debug']
+                    if 'default-prefix' in settings:
+                        global DEFAULT_PREFIX
+                        DEFAULT_PREFIX = settings['default-prefix']
+                    if 'unicode-prefix' in settings:
+                        global UNICODE_PREFIX
+                        UNICODE_PREFIX = settings['unicode-prefix']
+                    if 'emoji-prefix' in settings:
+                        global EMOJI_PREFIX
+                        EMOJI_PREFIX = settings['emoji-prefix']
+                    if 'default-case-sensitive' in settings:
+                        global DEFAULT_CASE_SENSITIVE
+                        DEFAULT_CASE_SENSITIVE = settings['default-case-sensitive']
+        # global UNICODE_PREFIX
+        # global EMOJI_PREFIX
+        if UNICODE_PREFIX == "":
+            UNICODE_PREFIX = DEFAULT_PREFIX
+        if EMOJI_PREFIX == "":
+            EMOJI_PREFIX = DEFAULT_PREFIX
+        
+    def _register_prefix(self, prefix, table_index):
+        if table_index not in self.reverse_prefix_map:
+            self.reverse_prefix_map[table_index] = [prefix]
+        else:
+            # This is to make it so that a table can be registered with only one prefix
+            # prev_prefix = self.reverse_prefix_map[table_index]
+            # del self.reverse_prefix_map[table_index]
+            # self.reverse_prefix_map[table_index] = prev_prefix
 
-    def _filter(self, query, limit=100):
-        if len(self.table) <= 10:
+            # self.prefix_map[prev_prefix].remove(table_index)
+            # if len(self.prefix_map[prev_prefix]) == 0:
+            #     del self.prefix_map[prev_prefix]
+
+            # While now a table can be registered with multiple prefixes
+            self.reverse_prefix_map[table_index].append(prefix)
+        if prefix not in self.prefix_map:
+            self.prefix_map[prefix] = []
+        self.prefix_map[prefix].append(table_index)
+
+    def _filter(self, query, limit=100, tables=[]):
+        if tables == []:
+            return []
+        
+        # if len(self.tables[tables[0]]) <= 10:
             # this only happens if something went wrong; it's our cheap way of displaying errors
-            return [[0, 0, message] for message in self.table]
+            # return [[0, 0, message] for message in self.tables[tables[0]]]
 
-        candidates = self.table
+        candidates_tables = []
+        for table in tables:
+            candidates_tables.append((self.tables[table], table))
+            # TODO: Since the tables are joined here, we can only do query on one term
+            # this is a problem since if a prefix is a subprefix of another, the actual
+            # terms to query would be different
 
         # Replace '_' in query with ' ' since that's how emojione names are stored
+        query_orig = query
+        query = query.lower()
         query = query.replace('_', ' ')
 
         query_words = []
@@ -344,79 +439,83 @@ class UniEmoji():
         # * 0 - levenshtein distance
         matched = []
 
-        for candidate, candidate_info in candidates.items():
-            if len(query) > len(candidate): continue
+        for (candidates, table_index) in candidates_tables:
+            for candidate, candidate_info in candidates.items():
+                if len(query) > len(candidate): continue
 
-            candidate_lowercase = candidate.lower()
+                candidate_lowercase = candidate.lower()
 
-            if query == candidate_lowercase:
-                # Exact match
-                if candidate_info.unicode_str:
-                    matched.append((20, 0, candidate, CANDIDATE_UNICODE))
-                if candidate_info.aliasing:
-                    matched.append((5, 0, candidate, CANDIDATE_ALIAS))
-            else:
-                # Substring match
-                word_ixs = []
-                substring_found = False
-                exact_word_match = 0
-                prefix_match = 0
-                for w, exact_regex, prefix_regex in query_words:
-                    ix = candidate_lowercase.find(w)
-                    if ix == -1:
-                        word_ixs.append(100)
-                    else:
-                        substring_found = True
-                        word_ixs.append(ix)
-
-                        # Check if an exact word match or a prefix match
-                        if exact_regex.search(candidate_lowercase):
-                            exact_word_match += 1
-                        elif prefix_regex.search(candidate_lowercase):
-                            prefix_match += 1
-
-                if substring_found and all(ix >= 0 for ix in word_ixs):
-                    # For substrings, the closer to the origin, the better
-                    score = -(float(sum(word_ixs)) / len(word_ixs))
-
-                    # Receive a boost if the substring matches a word or a prefix
-                    score += 20 * exact_word_match + 10 * prefix_match
-
+                if query == candidate_lowercase:
+                    # If we want case sensitivity, we only match exact case
+                    if query_orig != candidate and self.case_sensitivity_map[table_index]:
+                        continue
+                    # Exact match
                     if candidate_info.unicode_str:
-                        matched.append((10, score, candidate, CANDIDATE_UNICODE))
+                        matched.append((20, 0, candidate, table_index, CANDIDATE_UNICODE))
                     if candidate_info.aliasing:
-                        matched.append((5, score, candidate, CANDIDATE_ALIAS))
+                        matched.append((5, 0, candidate, table_index, CANDIDATE_ALIAS))
                 else:
-                    # Levenshtein distance
-                    score = 0
-                    if Levenshtein is None:
-                        opcodes = SequenceMatcher(None, query, candidate_lowercase,
-                            autojunk=False).get_opcodes()
-                    else:
-                        opcodes = Levenshtein.opcodes(query, candidate_lowercase)
-                    for (tag, i1, i2, j1, j2) in opcodes:
-                        if tag in ('replace', 'delete'):
-                            score = 0
-                            break
-                        if tag == 'insert':
-                            score -= 1
-                        if tag == 'equal':
-                            score += i2 - i1
-                            # favor word boundaries
-                            if j1 == 0:
-                                score += 2
-                            elif candidate[j1 - 1] == ' ':
-                                score += 1
-                            if j2 == len(candidate):
-                                score += 2
-                            elif [j2] == ' ':
-                                score += 1
-                    # Edited to improve performance. We filter out low score candidates.
-                    if score > 0:
+                    # Substring match
+                    word_ixs = []
+                    substring_found = False
+                    exact_word_match = 0
+                    prefix_match = 0
+                    for w, exact_regex, prefix_regex in query_words:
+                        ix = candidate_lowercase.find(w)
+                        if ix == -1:
+                            word_ixs.append(100)
+                        else:
+                            substring_found = True
+                            word_ixs.append(ix)
+
+                            # Check if an exact word match or a prefix match
+                            if exact_regex.search(candidate_lowercase):
+                                exact_word_match += 1
+                            elif prefix_regex.search(candidate_lowercase):
+                                prefix_match += 1
+
+                    if substring_found and all(ix >= 0 for ix in word_ixs):
+                        # For substrings, the closer to the origin, the better
+                        score = -(float(sum(word_ixs)) / len(word_ixs))
+
+                        # Receive a boost if the substring matches a word or a prefix
+                        score += 20 * exact_word_match + 10 * prefix_match
+
                         if candidate_info.unicode_str:
-                            matched.append((0, score, candidate, CANDIDATE_UNICODE))
+                            matched.append((10, score, candidate, table_index, CANDIDATE_UNICODE))
                         if candidate_info.aliasing:
-                            matched.append((0, score, candidate, CANDIDATE_ALIAS))
+                            matched.append((5, score, candidate, table_index, CANDIDATE_ALIAS))
+                    else:
+                        # Levenshtein distance
+                        score = 0
+                        if Levenshtein is None:
+                            opcodes = SequenceMatcher(None, query, candidate_lowercase,
+                                autojunk=False).get_opcodes()
+                        else:
+                            opcodes = Levenshtein.opcodes(query, candidate_lowercase)
+                        for (tag, i1, i2, j1, j2) in opcodes:
+                            if tag in ('replace', 'delete'):
+                                score = 0
+                                break
+                            if tag == 'insert':
+                                score -= 1
+                            if tag == 'equal':
+                                score += i2 - i1
+                                # favor word boundaries
+                                if j1 == 0:
+                                    score += 2
+                                elif candidate[j1 - 1] == ' ':
+                                    score += 1
+                                if j2 == len(candidate):
+                                    score += 2
+                                elif [j2] == ' ':
+                                    score += 1
+                        # Edited to improve performance. We filter out low score candidates.
+                        if score > 0:
+                            if candidate_info.unicode_str:
+                                matched.append((0, score, candidate, table_index, CANDIDATE_UNICODE))
+                            if candidate_info.aliasing:
+                                matched.append((0, score, candidate, table_index, CANDIDATE_ALIAS))
 
         # The first two fields are sorted in reverse.
         # The third text field is sorted by the length of the string, then alphabetically.
@@ -424,7 +523,19 @@ class UniEmoji():
         matched.sort(key=lambda x: (x[0], x[1]), reverse=True)
         return matched[:limit]
 
-    def find_characters(self, query_string):
+    def find_characters(self, query_string, prefixes=[]):
+        if len(prefixes) == 0:
+            tables = list(range(len(self.tables)))
+        elif prefixes is not None:
+            tables = []
+            for prefix in prefixes:
+                tbls = self.prefix_map.get(prefix)
+                if tbls is not None:
+                    for tbl in tbls:
+                        tables.append(tbl)
+        else:
+            return []
+        
         results = []
         candidate_strings = set()
 
@@ -449,8 +560,8 @@ class UniEmoji():
             append_result(ascii_match, display_str)
 
         # Look for a fuzzy match against a description
-        for level, score, name, candidate_type in self._filter(query_string.lower()):
-            uniemoji_char = self.table[name]
+        for level, score, name, table_index, candidate_type in self._filter(query_string, tables=tables):
+            uniemoji_char = self.tables[table_index][name]
 
             # Since we have several sources (UnicodeData.txt, EmojiOne),
             # make sure we don't output multiple identical candidates
@@ -495,6 +606,9 @@ class UniEmoji():
                 append_result(unicode_str, display_str)
 
         return results
+    
+    def get_prefixes(self):
+        return self.prefix_map.keys()
 
 if __name__ == '__main__':
     query_string = ' '.join(sys.argv[1:])

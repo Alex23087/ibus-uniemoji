@@ -65,7 +65,7 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.preedit_string = ''
         self.lookup_table = IBus.LookupTable.new(10, 0, True, True)
         self.prop_list = IBus.PropList()
-        self._setup_prefixes(["::"])
+        self._setup_prefixes(list(self.uniemoji.get_prefixes()))
         
         debug("Create UniEmoji engine OK")
 
@@ -74,6 +74,7 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.lastnchars = ""
         self.max_prefix_len = max(len(p) for p in prefixes) if len(prefixes) > 0 else 0
         self.active_prefixes = []
+        debug(self.prefixes)
         
     def _reset_active_prefixes(self):
         self.active_prefixes.clear()
@@ -109,11 +110,13 @@ class UniEmojiIBusEngine(IBus.Engine):
 
         if len(self.prefixes) > 0:
             # Add the key to the lastnchars buffer
-            if keyval in (IBus.Return, IBus.KP_Enter, IBus.Escape, IBus.BackSpace):
+            if keyval in (IBus.Escape, IBus.BackSpace):
+                # TODO: Handle backspace correctly
+                # TODO: Handle Return and Enter correctly
                 self.lastnchars = ""
-                if len(self.active_prefixes) == 0:
-                    self.commit_string(self.preedit_string)
-                    return False
+                # if len(self.active_prefixes) == 0:
+                self.commit_string(self.preedit_string)
+                return False
             elif keyval < 128 and chr(keyval).isprintable():
                 self.lastnchars += chr(keyval)
                 if len(self.lastnchars) > self.max_prefix_len:
@@ -129,8 +132,8 @@ class UniEmojiIBusEngine(IBus.Engine):
                             if prefix in self.lastnchars:
                                 if prefix not in self.active_prefixes:
                                     self.active_prefixes.append(prefix)
+                                    debug('prefix "{}" activated'.format(prefix))
                             break
-                    del i
                 del prefix
                 
                 if len(self.active_prefixes) == 0:
@@ -188,11 +191,16 @@ class UniEmojiIBusEngine(IBus.Engine):
             elif keyval in (IBus.Down, IBus.KP_Down):
                 self.cursor_down()
                 return True
-
-        if keyval == IBus.space and len(self.preedit_string) == 0:
-            # Insert space if that's all you typed (so you can more easily
-            # type a bunch of emoji separated by spaces)
-            return False
+            
+        if keyval == IBus.space:
+            print("test")
+            if len(self.candidates) == 0 and len(self.preedit_string) != 0:
+                self.commit_string(self.preedit_string)
+                return False
+            if len(self.preedit_string) == 0:
+                # Insert space if that's all you typed (so you can more easily
+                # type a bunch of emoji separated by spaces)
+                return False
 
         # Allow typing all ASCII letters and punctuation, except digits
         if ord(' ') <= keyval < ord('0') or \
@@ -256,19 +264,23 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.candidates = []
 
         if preedit_len > 0:
-            if (len(self.prefixes) > 0):
-                queries = []
-                for p in self.active_prefixes:
-                    if self.preedit_string.startswith(p):
-                        query = self.preedit_string[len(p):]
-                        if query not in queries:
-                            queries.append(query)
+            # if (len(self.prefixes) > 0):
+            #     queries = []
+            #     for p in self.active_prefixes:
+            #         if self.preedit_string.startswith(p):
+            #             query = self.preedit_string[len(p):]
+            #             if query not in queries:
+            #                 queries.append(query)
                     
-                uniemoji_results = []
-                for query in queries:
-                    uniemoji_results = self.uniemoji.find_characters(query)
+            #     uniemoji_results = []
+            #     for query in queries:
+            #         uniemoji_results = self.uniemoji.find_characters(query)
+            # else:
+            if len(self.active_prefixes) > 0:
+                # TODO Here too, we only consider the first prefix
+                uniemoji_results = self.uniemoji.find_characters(self.preedit_string[len(self.active_prefixes[0]):], self.active_prefixes)
             else:
-                uniemoji_results = self.uniemoji.find_characters(self.preedit_string)
+                uniemoji_results = self.uniemoji.find_characters(self.preedit_string, self.active_prefixes)
             for char_sequence, display_str in uniemoji_results:
                 candidate = IBus.Text.new_from_string(display_str)
                 self.candidates.append(char_sequence)
@@ -285,6 +297,9 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.update_preedit_text(text, preedit_len, preedit_len > 0)
         self._update_lookup_table()
         self.is_invalidate = False
+        
+        if len(self.candidates) == 1:
+            self.commit_candidate()
         
     def update_prefix_text(self):
         preedit_len = len(self.preedit_string)
