@@ -102,21 +102,44 @@ class UniEmojiIBusEngine(IBus.Engine):
 
     def do_process_key_event(self, keyval, keycode, state):
         # debug("process_key_event(%04x, %04x, %04x)" % (keyval, keycode, state))
+        # debug(IBus.keyval_name(keyval))
 
         # ignore key release events
         is_press = ((state & IBus.ModifierType.RELEASE_MASK) == 0)
         if not is_press:
             return False
+        if state & (IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.MOD1_MASK | IBus.ModifierType.MOD2_MASK) != 0:
+            self.commit_string(self.preedit_string)
+            return False
 
         if len(self.prefixes) > 0:
+            # TODO: Handle Return and Enter correctly
             # Add the key to the lastnchars buffer
-            if keyval in (IBus.Escape, IBus.BackSpace):
-                # TODO: Handle backspace correctly
-                # TODO: Handle Return and Enter correctly
+            if keyval in (IBus.Escape,):
+                # debug('escape')
                 self.lastnchars = ""
-                # if len(self.active_prefixes) == 0:
                 self.commit_string(self.preedit_string)
                 return False
+            elif keyval in (IBus.BackSpace,):
+                # print('backspace')
+                if len(self.active_prefixes) == 0:
+                    self.lastnchars = self.lastnchars[:-1]
+                    if len(self.preedit_string) > 0:
+                        self.preedit_string = self.preedit_string[:-1]
+                        self.update_prefix_text()
+                        return True
+                    else:
+                        return False
+                else:
+                    self.lastnchars = self.lastnchars[:-1]
+                    self.preedit_string = self.preedit_string[:-1]
+                    for i in range(len(self.active_prefixes)):
+                        if self.active_prefixes[i] not in self.preedit_string:
+                            del self.active_prefixes[i]
+                    # self.update_candidates()
+                    self.is_invalidate = True
+                    self.update_prefix_text()
+                    return True
             elif keyval < 128 and chr(keyval).isprintable():
                 self.lastnchars += chr(keyval)
                 if len(self.lastnchars) > self.max_prefix_len:
