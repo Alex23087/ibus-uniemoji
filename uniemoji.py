@@ -359,22 +359,22 @@ class UniEmoji():
             settings_filename = os.path.join(d, 'settings.json')
             if os.path.isfile(settings_filename):
                 with open(settings_filename, encoding='utf-8') as f:
-                    settings = json.loads(f.read())
-                    if 'debug' in settings:
+                    self.settings = json.loads(f.read())
+                    if 'debug' in self.settings:
                         global debug_on
-                        debug_on = settings['debug']
-                    if 'default-prefix' in settings:
+                        debug_on = self.settings['debug']
+                    if 'default-prefix' in self.settings:
                         global DEFAULT_PREFIX
-                        DEFAULT_PREFIX = settings['default-prefix']
-                    if 'unicode-prefix' in settings:
+                        DEFAULT_PREFIX = self.settings['default-prefix']
+                    if 'unicode-prefix' in self.settings:
                         global UNICODE_PREFIX
-                        UNICODE_PREFIX = settings['unicode-prefix']
-                    if 'emoji-prefix' in settings:
+                        UNICODE_PREFIX = self.settings['unicode-prefix']
+                    if 'emoji-prefix' in self.settings:
                         global EMOJI_PREFIX
-                        EMOJI_PREFIX = settings['emoji-prefix']
-                    if 'default-case-sensitive' in settings:
+                        EMOJI_PREFIX = self.settings['emoji-prefix']
+                    if 'default-case-sensitive' in self.settings:
                         global DEFAULT_CASE_SENSITIVE
-                        DEFAULT_CASE_SENSITIVE = settings['default-case-sensitive']
+                        DEFAULT_CASE_SENSITIVE = self.settings['default-case-sensitive']
         # global UNICODE_PREFIX
         # global EMOJI_PREFIX
         if UNICODE_PREFIX == "":

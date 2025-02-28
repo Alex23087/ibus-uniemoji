@@ -61,6 +61,8 @@ class UniEmojiIBusEngine(IBus.Engine):
     def __init__(self):
         super(UniEmojiIBusEngine, self).__init__()
         self.uniemoji = UniEmoji()
+        global debug_on
+        debug_on = self.uniemoji.settings.get('debug', False)
         self.is_invalidate = False
         self.preedit_string = ''
         self.lookup_table = IBus.LookupTable.new(10, 0, True, True)
@@ -74,11 +76,24 @@ class UniEmojiIBusEngine(IBus.Engine):
         self.lastnchars = ""
         self.max_prefix_len = max(len(p) for p in prefixes) if len(prefixes) > 0 else 0
         self.active_prefixes = []
+        self.max_active_prefix_len = 0
         debug(self.prefixes)
         
     def _reset_active_prefixes(self):
         self.active_prefixes.clear()
+        self.max_active_prefix_len = 0
         self.lastnchars = ""
+        
+    def _add_active_prefix(self, prefix):
+        if prefix not in self.active_prefixes:
+            self.active_prefixes.append(prefix)
+            self.max_active_prefix_len = max(self.max_active_prefix_len, len(prefix))
+            debug('prefix "{}" activated'.format(prefix))
+            
+    def _remove_active_prefix(self, index):
+        del self.active_prefixes[index]
+        self.max_active_prefix_len = max(len(p) for p in self.active_prefixes)
+        debug('prefix removed')
         
     def set_lookup_table_cursor_pos_in_current_page(self, index):
         '''Sets the cursor in the lookup table to index in the current page
@@ -121,7 +136,7 @@ class UniEmojiIBusEngine(IBus.Engine):
                 self.commit_string(self.preedit_string)
                 return False
             elif keyval in (IBus.BackSpace,):
-                # print('backspace')
+                # debug('backspace')
                 if len(self.active_prefixes) == 0:
                     self.lastnchars = self.lastnchars[:-1]
                     if len(self.preedit_string) > 0:
@@ -135,7 +150,7 @@ class UniEmojiIBusEngine(IBus.Engine):
                     self.preedit_string = self.preedit_string[:-1]
                     for i in range(len(self.active_prefixes)):
                         if self.active_prefixes[i] not in self.preedit_string:
-                            del self.active_prefixes[i]
+                            self._remove_active_prefix(i)
                     # self.update_candidates()
                     self.is_invalidate = True
                     self.update_prefix_text()
@@ -153,9 +168,7 @@ class UniEmojiIBusEngine(IBus.Engine):
                         if prefix.startswith(self.lastnchars[-i:]):                        
                             partial_match = True
                             if prefix in self.lastnchars:
-                                if prefix not in self.active_prefixes:
-                                    self.active_prefixes.append(prefix)
-                                    debug('prefix "{}" activated'.format(prefix))
+                                self._add_active_prefix(prefix)
                             break
                 del prefix
                 
@@ -268,17 +281,18 @@ class UniEmojiIBusEngine(IBus.Engine):
             return True
         return False
 
-    def commit_string(self, text):
+    def commit_string(self, text, update_candidates=True):
         self.commit_text(IBus.Text.new_from_string(text))
         self.preedit_string = ''
-        self.update_candidates()
+        if update_candidates:
+            self.update_candidates()
         self._reset_active_prefixes()
 
     def commit_candidate(self):
         self.commit_string(self.candidates[self.lookup_table.get_cursor_pos()])
 
     def update_candidates(self):
-        print('preedit_string:', self.preedit_string)
+        debug('preedit_string:', self.preedit_string)
         
         preedit_len = len(self.preedit_string)
         attrs = IBus.AttrList()
@@ -320,8 +334,10 @@ class UniEmojiIBusEngine(IBus.Engine):
         self._update_lookup_table()
         self.is_invalidate = False
         
-        if len(self.candidates) == 1:
+        if (len(self.candidates) == 1 and self.uniemoji.settings.get('commit_on_single_candidate', True)):
             self.commit_candidate()
+        elif len(self.candidates) == 0 and self.uniemoji.settings.get('commit_on_zero_candidates', True) and len(self.preedit_string) > self.max_active_prefix_len:
+            self.commit_string(self.preedit_string, False)
         
     def update_prefix_text(self):
         preedit_len = len(self.preedit_string)
