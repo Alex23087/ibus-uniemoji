@@ -143,8 +143,8 @@ class UniEmojiIBusEngine(IBus.Engine):
                         self.update_prefix_text()
                         return True
                     else:
-                        self.commit_string(self.preedit_string)
-                        return False
+                        self.commit_string(self.preedit_string + chr(keyval))
+                        return True
                     
         
         if self.preedit_string:
@@ -193,10 +193,9 @@ class UniEmojiIBusEngine(IBus.Engine):
                 return True
             
         if keyval == IBus.space:
-            print("test")
             if len(self.candidates) == 0 and len(self.preedit_string) != 0:
-                self.commit_string(self.preedit_string)
-                return False
+                self.commit_string(self.preedit_string + chr(keyval))
+                return True
             if len(self.preedit_string) == 0:
                 # Insert space if that's all you typed (so you can more easily
                 # type a bunch of emoji separated by spaces)
